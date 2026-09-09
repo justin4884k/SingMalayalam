@@ -43,7 +43,19 @@ const passages = [
   },
 ];
 
-const melody = [261.63, 329.63, 392, 349.23, 329.63, 293.66, 261.63, 293.66, 329.63, 392, 440, 392, 349.23, 329.63, 293.66, 261.63];
+const hymnBars = [
+  { chord: [261.63, 329.63, 392], bass: 130.81, melody: [392, 440, 392, 329.63, 293.66, 329.63] },
+  { chord: [196, 246.94, 293.66], bass: 98, melody: [392, 392, 440, 392, 349.23, 329.63] },
+  { chord: [220, 261.63, 329.63], bass: 110, melody: [329.63, 349.23, 392, 440, 392, 349.23] },
+  { chord: [174.61, 220, 261.63], bass: 87.31, melody: [329.63, 293.66, 261.63, 293.66, 329.63, 392] },
+  { chord: [261.63, 329.63, 392], bass: 130.81, melody: [440, 440, 392, 329.63, 349.23, 392] },
+  { chord: [196, 246.94, 293.66], bass: 98, melody: [392, 349.23, 329.63, 293.66, 329.63, 349.23] },
+  { chord: [174.61, 220, 261.63], bass: 87.31, melody: [392, 440, 392, 349.23, 329.63, 293.66] },
+  { chord: [261.63, 329.63, 392], bass: 130.81, melody: [329.63, 293.66, 261.63, 261.63, 261.63, 261.63] },
+];
+
+const hymnTempo = 64;
+const hymnBarSeconds = (60 / hymnTempo) * 2;
 
 function formatTime(value: number) {
   const minutes = Math.floor(value / 60);
@@ -73,14 +85,14 @@ export default function Home() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const voiceAudioRef = useRef<HTMLAudioElement | null>(null);
   const gainRef = useRef<GainNode | null>(null);
-  const melodyTimerRef = useRef<number | null>(null);
+  const arrangementTimerRef = useRef<number | null>(null);
 
   const passage = passages[passageIndex];
   const effectiveDuration = trackDuration || passage.duration;
 
   const stopAudio = () => {
-    if (melodyTimerRef.current) window.clearInterval(melodyTimerRef.current);
-    melodyTimerRef.current = null;
+    if (arrangementTimerRef.current) window.clearInterval(arrangementTimerRef.current);
+    arrangementTimerRef.current = null;
     if (voiceAudioRef.current) {
       voiceAudioRef.current.pause();
       voiceAudioRef.current = null;
@@ -99,18 +111,51 @@ export default function Home() {
     if (voiceAudioRef.current) voiceAudioRef.current.volume = volume / 100;
   }, [volume]);
 
-  const playTone = (context: AudioContext, frequency: number, at: number) => {
+  const playTone = (
+    context: AudioContext,
+    frequency: number,
+    at: number,
+    duration: number,
+    level: number,
+    type: OscillatorType = 'sine',
+    detune = 0,
+  ) => {
     const oscillator = context.createOscillator();
     const noteGain = context.createGain();
-    oscillator.type = voiceMode === 'male' ? 'triangle' : 'sine';
-    oscillator.frequency.value = voiceMode === 'male' ? frequency / 2 : frequency;
+    oscillator.type = type;
+    oscillator.frequency.value = frequency;
+    oscillator.detune.value = detune;
     noteGain.gain.setValueAtTime(0.0001, at);
-    noteGain.gain.exponentialRampToValueAtTime(0.22, at + 0.08);
-    noteGain.gain.exponentialRampToValueAtTime(0.0001, at + 1.35);
+    noteGain.gain.exponentialRampToValueAtTime(level, at + 0.06);
+    noteGain.gain.setValueAtTime(level * 0.72, at + Math.max(0.08, duration - 0.16));
+    noteGain.gain.exponentialRampToValueAtTime(0.0001, at + duration);
     oscillator.connect(noteGain);
     noteGain.connect(gainRef.current!);
     oscillator.start(at);
-    oscillator.stop(at + 1.4);
+    oscillator.stop(at + duration + 0.02);
+  };
+
+  const scheduleHymnBar = (context: AudioContext, barIndex: number, at: number) => {
+    const bar = hymnBars[barIndex % hymnBars.length];
+    const subdivision = hymnBarSeconds / 6;
+
+    // Reed-organ harmony: a quiet, breathy triad with a slightly detuned rank.
+    bar.chord.forEach((frequency) => {
+      playTone(context, frequency, at, hymnBarSeconds * 0.98, 0.038, 'sine');
+      playTone(context, frequency * 2, at, hymnBarSeconds * 0.98, 0.012, 'triangle', 3);
+    });
+
+    // A low tonic/fifth drone gives the arrangement its Kerala devotional bed.
+    playTone(context, bar.bass, at, hymnBarSeconds * 0.96, 0.055, 'sine');
+    if (barIndex % 2 === 0) playTone(context, 98, at, hymnBarSeconds * 1.9, 0.018, 'sine');
+
+    // The melody is phrased in 6/8, with a soft harmonium-like doubled octave.
+    bar.melody.forEach((frequency, noteIndex) => {
+      const noteAt = at + noteIndex * subdivision;
+      const duration = noteIndex === 5 ? subdivision * 1.7 : subdivision * 0.9;
+      playTone(context, frequency, noteAt, duration, 0.075, 'triangle');
+      playTone(context, frequency * 2, noteAt, duration, 0.016, 'sine', -4);
+    });
   };
 
   const beginPlayback = (selectedVoice: VoiceMode = voiceMode, startAt = progress) => {
@@ -123,12 +168,12 @@ export default function Home() {
     audioContextRef.current = context;
     gainRef.current = masterGain;
 
-    let noteIndex = 0;
-    playTone(context, melody[noteIndex], context.currentTime);
-    melodyTimerRef.current = window.setInterval(() => {
-      noteIndex = (noteIndex + 1) % melody.length;
-      playTone(context, melody[noteIndex], context.currentTime);
-    }, 1420);
+    let barIndex = Math.floor(startAt / hymnBarSeconds);
+    scheduleHymnBar(context, barIndex, context.currentTime + 0.04);
+    arrangementTimerRef.current = window.setInterval(() => {
+      barIndex = (barIndex + 1) % hymnBars.length;
+      scheduleHymnBar(context, barIndex, context.currentTime + 0.04);
+    }, hymnBarSeconds * 1000);
 
     const voiceAudio = new Audio(`/audio/${passage.id}-${selectedVoice}.mp3`);
     voiceAudio.volume = volume / 100;
