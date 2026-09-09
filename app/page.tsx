@@ -56,7 +56,7 @@ const hymnBars = [
 
 const hymnTempo = 64;
 const hymnBarSeconds = (60 / hymnTempo) * 2;
-const accompanimentVolumeDivisor = 190;
+const accompanimentVolumeDivisor = 109;
 
 function formatTime(value: number) {
   const minutes = Math.floor(value / 60);
