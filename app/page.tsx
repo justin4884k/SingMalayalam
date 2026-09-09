@@ -56,6 +56,7 @@ const hymnBars = [
 
 const hymnTempo = 64;
 const hymnBarSeconds = (60 / hymnTempo) * 2;
+const accompanimentVolumeDivisor = 190;
 
 function formatTime(value: number) {
   const minutes = Math.floor(value / 60);
@@ -107,7 +108,7 @@ export default function Home() {
   useEffect(() => () => stopAudio(), []);
 
   useEffect(() => {
-    if (gainRef.current) gainRef.current.gain.value = volume / 280;
+    if (gainRef.current) gainRef.current.gain.value = volume / accompanimentVolumeDivisor;
     if (voiceAudioRef.current) voiceAudioRef.current.volume = volume / 100;
   }, [volume]);
 
@@ -163,7 +164,7 @@ export default function Home() {
     setAudioError(false);
     const context = new AudioContext();
     const masterGain = context.createGain();
-    masterGain.gain.value = volume / 280;
+    masterGain.gain.value = volume / accompanimentVolumeDivisor;
     masterGain.connect(context.destination);
     audioContextRef.current = context;
     gainRef.current = masterGain;
