@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   BookOpen, ChevronLeft, ChevronRight, Heart, Menu, Music2,
   Pause, Play, RotateCcw, Share2, Sparkles, Volume2, X,
@@ -64,24 +64,27 @@ export default function Home() {
   const [voiceMode, setVoiceMode] = useState<VoiceMode>('male');
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [trackDuration, setTrackDuration] = useState(0);
   const [volume, setVolume] = useState(58);
   const [showLibrary, setShowLibrary] = useState(false);
   const [liked, setLiked] = useState(false);
   const [shared, setShared] = useState(false);
+  const [audioError, setAudioError] = useState(false);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const voiceAudioRef = useRef<HTMLAudioElement | null>(null);
   const gainRef = useRef<GainNode | null>(null);
   const melodyTimerRef = useRef<number | null>(null);
-  const elapsedTimerRef = useRef<number | null>(null);
 
   const passage = passages[passageIndex];
-  const fullText = useMemo(() => passage.text.join(' '), [passage]);
+  const effectiveDuration = trackDuration || passage.duration;
 
   const stopAudio = () => {
-    window.speechSynthesis?.cancel();
     if (melodyTimerRef.current) window.clearInterval(melodyTimerRef.current);
-    if (elapsedTimerRef.current) window.clearInterval(elapsedTimerRef.current);
     melodyTimerRef.current = null;
-    elapsedTimerRef.current = null;
+    if (voiceAudioRef.current) {
+      voiceAudioRef.current.pause();
+      voiceAudioRef.current = null;
+    }
     if (audioContextRef.current) {
       void audioContextRef.current.close();
       audioContextRef.current = null;
@@ -93,6 +96,7 @@ export default function Home() {
 
   useEffect(() => {
     if (gainRef.current) gainRef.current.gain.value = volume / 280;
+    if (voiceAudioRef.current) voiceAudioRef.current.volume = volume / 100;
   }, [volume]);
 
   const playTone = (context: AudioContext, frequency: number, at: number) => {
@@ -109,8 +113,9 @@ export default function Home() {
     oscillator.stop(at + 1.4);
   };
 
-  const beginPlayback = () => {
+  const beginPlayback = (selectedVoice: VoiceMode = voiceMode, startAt = progress) => {
     stopAudio();
+    setAudioError(false);
     const context = new AudioContext();
     const masterGain = context.createGain();
     masterGain.gain.value = volume / 280;
@@ -125,28 +130,30 @@ export default function Home() {
       playTone(context, melody[noteIndex], context.currentTime);
     }, 1420);
 
-    if ('speechSynthesis' in window) {
-      const utterance = new SpeechSynthesisUtterance(fullText);
-      utterance.lang = 'ml-IN';
-      utterance.rate = 0.72;
-      utterance.pitch = voiceMode === 'male' ? 0.72 : 1.24;
-      const voices = window.speechSynthesis.getVoices();
-      const malayalamVoices = voices.filter((voice) => voice.lang.toLowerCase().startsWith('ml'));
-      const chosen = voiceMode === 'female' ? malayalamVoices.at(-1) : malayalamVoices[0];
-      if (chosen) utterance.voice = chosen;
-      window.speechSynthesis.speak(utterance);
-    }
-
-    elapsedTimerRef.current = window.setInterval(() => {
-      setProgress((current) => {
-        if (current >= passage.duration) {
-          stopAudio();
-          setIsPlaying(false);
-          return 0;
-        }
-        return current + 1;
-      });
-    }, 1000);
+    const voiceAudio = new Audio(`/audio/${passage.id}-${selectedVoice}.mp3`);
+    voiceAudio.volume = volume / 100;
+    voiceAudio.preload = 'auto';
+    voiceAudio.addEventListener('loadedmetadata', () => {
+      setTrackDuration(voiceAudio.duration);
+      if (startAt > 0 && startAt < voiceAudio.duration) voiceAudio.currentTime = startAt;
+    });
+    voiceAudio.addEventListener('timeupdate', () => setProgress(voiceAudio.currentTime));
+    voiceAudio.addEventListener('ended', () => {
+      stopAudio();
+      setProgress(0);
+      setIsPlaying(false);
+    });
+    voiceAudio.addEventListener('error', () => {
+      stopAudio();
+      setAudioError(true);
+      setIsPlaying(false);
+    });
+    voiceAudioRef.current = voiceAudio;
+    void voiceAudio.play().catch(() => {
+      stopAudio();
+      setAudioError(true);
+      setIsPlaying(false);
+    });
   };
 
   const togglePlayback = () => {
@@ -163,7 +170,9 @@ export default function Home() {
     stopAudio();
     setPassageIndex(index);
     setProgress(0);
+    setTrackDuration(0);
     setIsPlaying(false);
+    setAudioError(false);
     setShowLibrary(false);
     setLiked(false);
   };
@@ -222,7 +231,7 @@ export default function Home() {
                 <span className="absolute -left-1 top-6 font-serif text-7xl leading-none text-rust/16">“</span>
                 <div className="relative space-y-5 pl-6 sm:pl-9">
                   {passage.text.map((line, index) => (
-                    <p key={line} className={`font-serif-malayalam text-xl leading-[1.9] transition-colors sm:text-2xl ${index === Math.min(Math.floor((progress / passage.duration) * passage.text.length), passage.text.length - 1) && isPlaying ? 'text-rust' : 'text-ink/86'}`}>
+                    <p key={line} className={`font-serif-malayalam text-xl leading-[1.9] transition-colors sm:text-2xl ${index === Math.min(Math.floor((progress / effectiveDuration) * passage.text.length), passage.text.length - 1) && isPlaying ? 'text-rust' : 'text-ink/86'}`}>
                       <sup className="mr-2 align-super text-[10px] font-bold text-rust/60">{index + 1}</sup>{line}
                     </p>
                   ))}
@@ -231,12 +240,12 @@ export default function Home() {
               <div className="space-y-5 rounded-[1.4rem] border border-ink/8 bg-white/38 p-4 sm:p-5">
                 <div className="grid grid-cols-[auto_1fr_auto] items-center gap-3 text-xs font-semibold text-ink/45">
                   <span>{formatTime(progress)}</span>
-                  <Slider value={[progress]} max={passage.duration} onValueChange={(value) => setProgress(Number(Array.isArray(value) ? value[0] : value))} aria-label="ഗാനത്തിന്റെ പുരോഗതി" className="[&_[data-slot=slider-range]]:bg-rust [&_[data-slot=slider-thumb]]:border-rust [&_[data-slot=slider-track]]:bg-ink/12" />
-                  <span>{formatTime(passage.duration)}</span>
+                  <Slider value={[progress]} max={effectiveDuration} onValueChange={(value) => { const next = Number(Array.isArray(value) ? value[0] : value); setProgress(next); if (voiceAudioRef.current) voiceAudioRef.current.currentTime = next; }} aria-label="ഗാനത്തിന്റെ പുരോഗതി" className="[&_[data-slot=slider-range]]:bg-rust [&_[data-slot=slider-thumb]]:border-rust [&_[data-slot=slider-track]]:bg-ink/12" />
+                  <span>{formatTime(effectiveDuration)}</span>
                 </div>
                 <div className="flex items-center justify-between gap-2">
                   <Button variant="ghost" size="icon-lg" className="rounded-full text-ink/55 hover:bg-ink/8" onClick={() => stepPassage(-1)} aria-label="മുൻ അധ്യായം"><ChevronLeft /></Button>
-                  <Button variant="ghost" size="icon-lg" className="rounded-full text-ink/55 hover:bg-ink/8" onClick={() => { setProgress(0); if (isPlaying) beginPlayback(); }} aria-label="വീണ്ടും തുടങ്ങുക"><RotateCcw /></Button>
+                  <Button variant="ghost" size="icon-lg" className="rounded-full text-ink/55 hover:bg-ink/8" onClick={() => { setProgress(0); if (isPlaying) beginPlayback(voiceMode, 0); }} aria-label="വീണ്ടും തുടങ്ങുക"><RotateCcw /></Button>
                   <Button onClick={togglePlayback} size="icon-lg" className="size-16 rounded-full bg-rust text-white shadow-lg hover:bg-[#873c2b]" aria-label={isPlaying ? 'നിർത്തുക' : 'കേൾക്കുക'}>{isPlaying ? <Pause className="size-6 fill-current" /> : <Play className="size-6 fill-current" />}</Button>
                   <Button variant="ghost" size="icon-lg" className="rounded-full text-ink/55 hover:bg-ink/8" onClick={() => stepPassage(1)} aria-label="അടുത്ത അധ്യായം"><ChevronRight /></Button>
                   <Button variant="ghost" size="icon-lg" className="rounded-full text-ink/55 hover:bg-ink/8" onClick={() => setLiked(!liked)} aria-label="പ്രിയപ്പെട്ടതാക്കുക"><Heart className={liked ? 'fill-rust text-rust' : ''} /></Button>
@@ -244,7 +253,7 @@ export default function Home() {
                 <div className="flex flex-col gap-4 border-t border-ink/8 pt-4 sm:flex-row sm:items-center sm:justify-between">
                   <fieldset className="flex items-center gap-1 rounded-full bg-ink/6 p-1" aria-label="ശബ്ദം തിരഞ്ഞെടുക്കുക">
                     {(['male', 'female'] as const).map((mode) => (
-                      <button key={mode} onClick={() => { setVoiceMode(mode); if (isPlaying) beginPlayback(); }} className={`rounded-full px-4 py-2 text-xs font-bold transition ${voiceMode === mode ? 'bg-ink text-cream shadow-sm' : 'text-ink/50 hover:text-ink'}`} aria-pressed={voiceMode === mode}>
+                      <button key={mode} onClick={() => { setVoiceMode(mode); setProgress(0); setTrackDuration(0); if (isPlaying) beginPlayback(mode, 0); }} className={`rounded-full px-4 py-2 text-xs font-bold transition ${voiceMode === mode ? 'bg-ink text-cream shadow-sm' : 'text-ink/50 hover:text-ink'}`} aria-pressed={voiceMode === mode}>
                         {mode === 'male' ? 'പുരുഷ ശബ്ദം' : 'സ്ത്രീ ശബ്ദം'}
                       </button>
                     ))}
@@ -254,7 +263,7 @@ export default function Home() {
               </div>
             </div>
           </div>
-          <p className="mt-5 text-center text-xs leading-5 text-cream/38">മലയാളം സത്യവേദപുസ്തകം 1910 · പൊതുസഞ്ചയം<br />{shared ? 'ലിങ്ക് പകർത്തി ✓' : 'ഉപകരണത്തിലെ ശബ്ദലഭ്യത അനുസരിച്ച് ആലാപനം മാറാം'}</p>
+          <p className="mt-5 text-center text-xs leading-5 text-cream/38">മലയാളം സത്യവേദപുസ്തകം 1910 · പൊതുസഞ്ചയം<br />{audioError ? 'ശബ്ദം ലോഡ് ചെയ്യാനായില്ല — വീണ്ടും ശ്രമിക്കൂ' : shared ? 'ലിങ്ക് പകർത്തി ✓' : 'മലയാള ശബ്ദം: Sarvam Bulbul v3 · സ്തുതിഗീത പശ്ചാത്തലം'}</p>
         </div>
       </section>
 
